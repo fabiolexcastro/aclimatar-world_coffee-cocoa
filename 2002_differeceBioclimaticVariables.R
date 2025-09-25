@@ -11,6 +11,10 @@ pacman::p_load(terra, fs, usdm, raster, gtools, spocc, randomForest, sf, outlier
 g <- gc(reset = T); rm(list = ls())
 options(scipen = 999, warn = -1)
 
+# Vector data -------------------------------------------------------------
+wrld <- geodata::world(resolution = 1, path = './tmpr', level = 0)
+wrld <- st_as_sf(wrld)
+
 # Data --------------------------------------------------------------------
 fles <- as.character(dir_ls('./common_data/bioclimatic_variables', regexp = '.tif$'))
 
@@ -44,8 +48,6 @@ gcms   <- names(ftre.r) %>% str_split('_') %>% map_chr(3) %>% unique()
 # To calculate the difference ---------------------------------------------
 calc.dfrn <- function(gcme){
   
-  gcme <- gcms[1]
-    
   ## Filtering the rasters
   cat('GCM: ', gcme, '\n')
   ftr <- ftre.r[[grep(gcme, names(ftre.r))]]
@@ -156,8 +158,130 @@ calc.dfrn <- function(gcme){
   return(dfr.stk)
   
 }
+dfrn <- map(gcms, calc.dfrn)
+dfrn <- reduce(dfrn, c)
+terra::writeRaster(x = dfrn, filename = './common_data/bioclimatic_variables/dfrn-bioc_gcms.tif', overwrite = TRUE)
 
 
+# To draw the maps --------------------------------------------------------
+
+make.map <- function(gcm){
+  
+  ## Filtering the GCM rasters
+  cat('>>> ', gcm, '\n')
+  bsl <- bsln.r
+  ftr <- ftre.r[[grep(gcm, names(ftre.r))]]
+  dfr <- dfrn[[grep(gcm, names(dfrn))]]
+  
+  ## To change the names
+  names(bsl) <- glue('bsl_{names(bsl)}')
+  names(ftr) <- glue('ftr_{names(ftr)}')
+  names(ftr) <- gsub(glue('_{gcm}'), '', names(ftr))
+  names(dfr) <- gsub(glue('_{gcm}'), '', names(dfr))
+  
+  ## Raster to table
+  stk <- c(bsl, ftr)
+  tbl <- terra::as.data.frame(stk, xy = T) %>% 
+    as_tibble() %>% 
+    mutate(gid = 1:nrow(.)) %>% 
+    gather(var, value, -c(gid, x, y))
+  
+  ### To separate de columns
+  tbl <- tbl %>% separate(data = ., col = 'var', into = c('Period', 'Bio', 'Variable'), sep = '_')
+  tbl <- mutate(tbl, Period = ifelse(Period == 'bsl', 'Baseline', 'Future'), Period = factor(Period, levels = c('Baseline', 'Future')))
+  tbl <- mutate(tbl, Variable = paste0('bioc_', Variable))
+  vrs <- names(stk) %>% str_sub(start = 5, end = nchar(.)) %>% unique()
+  
+  ### To draw the map 
+  ggs <- map(.x = vrs, .f = function(v){
+    
+    ## Grepping
+    cat(v, '\n')
+    trr <- stk[[grep(paste0(v, '$'), names(stk), value = F)]]
+    dfn <- dfr[[grep(paste0(v, '$'), names(stk), value = F)]]
+    
+    ## To change the names for the raster
+    names(trr) <- c('bsl', 'ftr')
+    names(dfn) <- 'dfn'
+    
+    ## Common theme
+    common_theme <- theme(
+      axis.title = element_blank(),
+      axis.text  = element_blank(),
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+      legend.key.width = unit(3, "line")
+    )
+    
+    ## To draw the map - Raw Values
+    gg1 <- ggplot() + 
+      geom_spatraster(data = trr, aes(fill = bsl)) +
+      scale_fill_viridis_c(na.value = 'white') +
+      geom_sf(data = wrld, fill = NA, col = 'grey30') +
+      coord_sf(ylim = c(-25, 25), xlim = c(-100, 170)) +
+      ggtitle(label = paste0(v, ' ', gcm, ' Baseline')) +
+      labs(fill = v) +
+      theme(
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = 'bottom',
+        plot.title = element_text(face = 'bold', hjust = 0.5, size = 14),
+        legend.key.width = unit(3, 'line')
+      )
+    
+    gg2 <- ggplot() + 
+      geom_spatraster(data = trr, aes(fill = ftr)) +
+      scale_fill_viridis_c(na.value = 'white') +
+      geom_sf(data = wrld, fill = NA, col = 'grey30') +
+      coord_sf(ylim = c(-25, 25), xlim = c(-100, 170)) +
+      labs(fill = v) +
+      ggtitle(label = paste0(v, ' ', gcm, ' Future')) +
+      theme(
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = 'bottom',
+        plot.title = element_text(face = 'bold', hjust = 0.5, size = 14),
+        legend.key.width = unit(3, 'line')
+      )
+    
+    ## To draw the map - Difference Values
+    gg3 <- ggplot() + 
+      geom_spatraster(data = dfn, aes(fill = dfn)) +
+      scale_fill_viridis_c(na.value = 'white') +
+      geom_sf(data = wrld, fill = NA, col = 'grey30') +
+      coord_sf(ylim = c(-25, 25), xlim = c(-100, 170)) +
+      labs(fill = v) +
+      ggtitle(label = paste0(v, ' ', gcm, ' Difference')) +
+      theme(
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = 'bottom',
+        plot.title = element_text(face = 'bold', hjust = 0.5, size = 14),
+        legend.key.width = unit(3, 'line')
+      )
+      
+    ## To join both maps into only one
+    gg12 <- ggpubr::ggarrange(gg1, gg2, ncol = 2, nrow = 1, common.legend = TRUE, legend = 'bottom')
+    gg13 <- ggpubr::ggarrange(gg12, gg3, ncol = 1, nrow = 2, common.legend = FALSE, legend = 'bottom')
+    
+    ## To save the map as a png
+    ggsave(plot = gg13, filename = glue('./png/maps/bio_values/{v}_{gcm}.jpg'), units = 'in', width = 11, height = 5, dpi = 300, create.dir = T)
+    return(gg13)
+    
+    
+  })
+    
+  
+  
+}
+
+## To table 
+# trr.tbl <- trr %>% terra::as.data.frame(xy = T) %>% as_tibble()
+# trr.tbl <- trr.tbl %>% gather(var, value, -c(x, y)) %>% mutate(variable = v)
+# trr.tbl <- trr.tbl %>% mutate(var = gsub(paste0('_', v), '', var))
+# trr.tbl <- trr.tbl %>% mutate(period = ifelse(var == 'bsl', 'Baseline', 'Future'), period = factor(period, levels = c('Baseline', 'Future')))
 
 
-
+# dfn.tbl <- dfn %>% terra::as.data.frame(xy = T) %>% as_tibble()
+# dfn.tbl <- dfn.tbl %>% setNames(c('x', 'y', 'value'))
+# dfn.tbl <- dfn.tbl %>% mutate(period = 'Difference')
