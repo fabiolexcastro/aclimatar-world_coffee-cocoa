@@ -5,7 +5,7 @@ require(pacman)
 p_load(terra, fs, sf, tidyverse, usdm, sp, raster, randomForest, outliers, readxl, hablar, glue, readxl, geodata, RColorBrewer)
 pacman::p_load(tidyverse, raster, ggpubr, rgdal, corrplot, cclust, dismo, gtools, sp, FactoMineR, pROC, randomForest, Hmisc)
 
-mg <- gc(reset = T)
+g <- gc(reset = T)
 rm(list = ls())
 options(scipen = 999, warn = -1)
 
@@ -38,14 +38,29 @@ cntn <- aggregate(wrld)
 plot(wrld)
 
 ## Tabular data ----------------------
-cffe <- read_csv('./tbl/points/clean/arabica_robusta_otl_swd.csv', show_col_types = FALSE)
+cffe <- read_csv('./tbl/points/clean/v2/arabica_robusta_otl_swd.csv', show_col_types = FALSE)
 
 cffe.ara <- filter(cffe, Specie == 'arabica')
 cffe.rob <- filter(cffe, Specie == 'robusta')
  
 ## Sampling arabica ## Add arabica and robusta into only one table
-cffe.ara <- cffe.ara %>% sample_n(size = 600, replace = FALSE, tbl = .)
+cffe.ara <- cffe.ara %>% sample_n(size = nrow(cffe.rob), replace = FALSE, tbl = .)
 cffe <- rbind(cffe.ara, cffe.rob)
+write.csv(cffe, './tbl/points/clean/v2/arabica_robusta_otl_swd_sampling.csv', row.names = FALSE)
+
+g.smp <- ggplot() + 
+  geom_point(data = cffe, aes(x = Lon, y = Lat, col = Specie), size = 0.5) +
+  geom_sf(data = wrld, fill = NA, col = 'grey40') +
+  coord_sf(ylim = c(-30, 30), xlim = c(-110, 150)) +
+  theme_bw() +
+  labs(caption = 'Arabica: 259\nRobusta: 259') +
+  theme(axis.text.x = element_text(size = 6), 
+        axis.text.y = element_text(size = 6, angle = 90),
+        legend.position = 'bottom') +
+  guides(color = guide_legend(override.aes = list(size = 5)))
+
+g.smp
+ggsave(plot = g.smp, filename = './png/maps/points/v2/point_ara-rob_sampling.jpg', units = 'in', width = 9, height = 4, dpi = 300, create.dir = T)
 
 ## Raster data -----------------------
 bioc <- terra::rast('./common_data/input_bios/bioc_hist.tif')
@@ -53,13 +68,6 @@ indx <- terra::rast('./common_data/atlas_hazards/hist_indices2.tif')
 indx <- indx[[grep('hist', names(indx))]]
 bioc <- c(bioc, indx)
 bioc <- bioc[[-grep('100', names(bioc))]]
-
-# Add the indices variables -----------------------------------------------
-cffe <- cbind(
-  cffe, 
-  terra::extract(indx, cffe[,c('Lon', 'Lat')])[,-1]
-) %>% 
-  as_tibble()
 
 ## Boxplot indices 
 gg.box <- cffe %>% dplyr::select(Lon, Lat, Specie, ends_with('hist')) %>% gather(var, value, -c(Lon, Lat, Specie)) %>% separate(col = 'var', into = c('index', 'period'), sep = '_') %>% 
@@ -73,7 +81,7 @@ gg.box <- cffe %>% dplyr::select(Lon, Lat, Specie, ends_with('hist')) %>% gather
     strip.text = element_text(face = 'bold', hjust = 0.5)
   )
 
-ggsave(plot = gg.box, filename = './png/graphs/boxplot_indices_arabica-robusta.jpg', units = 'in', width = 8, height = 6, dpi = 300, create.dir = TRUE)
+ggsave(plot = gg.box, filename = './png/graphs/v2/boxplot_indices_arabica-robusta.jpg', units = 'in', width = 8, height = 6, dpi = 300, create.dir = TRUE)
 
 # VIF analysis ------------------------------------------------------------
 occ <- cffe
@@ -81,12 +89,12 @@ occ <- drop_na(occ)
 vif.res <- vif(x = as.data.frame(occ)[,5:ncol(occ)])
 vif.step <- vifstep(x = as.data.frame(occ)[,5:ncol(occ)], th = 10)
 vrs <- vif.step@results$Variables %>% as.character()
-saveRDS(vrs, './rds/vars_coffee_arabica-robusta.rds')
+saveRDS(vrs, './rds/v2/vars_coffee_arabica-robusta.rds')
 
 ##
 mtrx <- occ[,5:ncol(occ)]
 corr <- as.matrix(mtrx)
-png(filename = './png/graphs/corplot_arabica-robusta.jpg', units = 'in', width = 9, height = 8, res = 300)
+png(filename = './png/graphs/v2/corplot_arabica-robusta.jpg', units = 'in', width = 9, height = 8, res = 300)
 corrplot::corrplot(cor(corr))
 dev.off()
 
@@ -97,12 +105,11 @@ plot(bioc.vars)
 
 bioc.vars <- bioc.vars %>% terra::as.data.frame(xy = T) %>% as_tibble() %>% gather(var, value, -c(x, y))
 unique(bioc.vars$var)
-
-bioc.vars.tasm <- bioc.vars %>% filter(var %in% c('bioc_2', 'bioc_3', 'bioc_8')) ## Temperature 
+bioc.vars.tasm <- bioc.vars %>% filter(var %in% c('bioc_2', 'bioc_3', 'bioc_4', 'bioc_8')) ## Temperature 
 bioc.vars.prec <- bioc.vars %>% filter(var %in% c('bioc_13', 'bioc_14', 'bioc_18', 'bioc_19'))
 bioc.vars.etps <- bioc.vars %>% filter(var %in% c('bioc_22', 'bioc_27', 'bioc_29'))
 bioc.vars.baln <- bioc.vars %>% filter(var %in% c('bioc_30', 'bioc_31'))
-bioc.vars.idts <- bioc.vars %>% filter(var %in% c('n30_hist', 'n35_hist'))
+bioc.vars.idts <- bioc.vars %>% filter(var %in% c('n30_hist', 'n35_hist', 'ndd_hist', 'ndw_hist'))
 
 ## Mapping variables
 make.mapp <- function(vari, clrs){
@@ -135,15 +142,16 @@ make.mapp <- function(vari, clrs){
   
   
 }
-maps.tasm <- map2(.x = c('bioc_2', 'bioc_3', 'bioc_8'), .y = replicate(3, brewer.pal(n = 9, name = "YlOrRd"), simplify = FALSE), .f = make.mapp)
+maps.tasm <- map2(.x = c('bioc_2', 'bioc_3', 'bioc_8', 'bioc_8'), .y = replicate(4, brewer.pal(n = 9, name = "YlOrRd"), simplify = FALSE), .f = make.mapp)
 maps.prec <- map2(.x = c('bioc_13', 'bioc_14', 'bioc_18', 'bioc_19'), .y = replicate(4, brewer.pal(n = 9, name = "BrBG"), simplify = FALSE), .f = make.mapp)
 maps.etps <- map2(.x = c('bioc_22', 'bioc_27', 'bioc_29'), .y = replicate(3, rev(brewer.pal(n = 9, name = "BrBG")), simplify = FALSE), .f = make.mapp)
 maps.baln <- map2(.x = c('bioc_30', 'bioc_31'), .y = replicate(2, rev(brewer.pal(n = 9, name = "BrBG")), simplify = FALSE), .f = make.mapp)
 maps.ints <- map2(.x = c('n30_hist', 'n35_hist'), .y = replicate(2, (brewer.pal(n = 9, name = "YlOrRd")), simplify = FALSE), .f = make.mapp)
 maps.ndds <- map2(.x = c('ndd_hist'), .y = replicate(1, rev(brewer.pal(n = 9, name = "BrBG")), simplify = FALSE), .f = make.mapp)
+maps.ndws <- map2(.x = c('ndw_hist'), .y = replicate(1, (brewer.pal(n = 9, name = "BrBG")), simplify = FALSE), .f = make.mapp)
 maps
-gmap <- cowplot::plot_grid(plotlist = c(maps.tasm, maps.prec, maps.etps, maps.baln, maps.ints, maps.ndds), ncol = 5, nrow = 4, common.legend = FALSE)
-ggplot2::ggsave(plot = gmap, filename = './png/maps/bios_bsl_vars_ara-rob.jpg', width = 17, height = 11,  dpi = 300, bg = "white")
+gmap <- cowplot::plot_grid(plotlist = c(maps.tasm, maps.prec, maps.etps, maps.baln, maps.ints, maps.ndds, maps.ndws), ncol = 5, nrow = 4, common.legend = FALSE)
+ggplot2::ggsave(plot = gmap, filename = './png/maps/v2/bios_bsl_vars_ara-rob.jpg', width = 17, height = 11,  dpi = 300, bg = "white")
 
 # To select the variables -------------------------------------------------
 occ <- occ %>% dplyr::select(Lon, Lat, Specie, vrs)
@@ -163,9 +171,8 @@ g.cff.ara
 ggsave(plot = g.cff.ara, filename = './png/maps/points/arabica-robusta_world.jpg', units = 'in', width = 8, height = 3, dpi = 300, create.dir = T)
 
 
-
 # Sampling for arabica ----------------------------------------------------
-write.csv(occ, './tbl/points/clean/arabica-robusta_otl_swd_sampling.csv', row.names = FALSE)
+# write.csv(occ, './tbl/points/clean/arabica-robusta_otl_swd_sampling.csv', row.names = FALSE)
 
 # Clustering --------------------------------------------------------------
 env_values <- as.matrix(occ[,4:ncol(occ)]); nrow(env_values)
@@ -178,29 +185,27 @@ classdata <- cbind(pb = as.factor(labelRF), occ[,3:ncol(occ)])
 clusteredpresdata <- cbind(occ, cluster = labelRF) %>% na.omit() %>% tbl_df()
 no.clusters <- 5
 
-dir.create('./rData/run_1_arabica-robusta')
-run <- 'run_1_arabica-robusta'
+dir.create('./rData/run_3_arabica-robusta')
+run <- 'run_3_arabica-robusta'
 save(datRF, file = paste0('./rData/', run, '/datRF.rData'))
 save(clusterdata, file = paste0('./rData/', run, '/clusterdata.rData'))
 save(occ, clusteredpresdata, no.clusters, labelRF, file = paste0('./rData/', run, '/clustereddata.rData'))
 save(clusteredpresdata, file = './rData/run_1_arabica/presences.rData')
-
 
 # Mapping clustering ------------------------------------------------------
 clusteredpresdata
 g.clst <- ggplot() + 
   geom_sf(data = st_as_sf(wrld), fill = NA, col = 'grey30') + 
   geom_point(data = clusteredpresdata, aes(x = Lon, y = Lat, col = factor(cluster))) + 
-  facet_wrap(.~cluster) +
+  # facet_wrap(.~cluster) +
   coord_sf(ylim = c(-30, 30), xlim = c(-130, 140)) +
   theme_bw() +
   theme(
     legend.position = 'bottom'
   )
 
-ggsave(plot = g.clst, filename = './png/maps/clustering/rf_cluster5_ara-rob.jpg', units = 'in', width = 9, height = 5, dpi = 300)
-
-
+g.clst
+ggsave(plot = g.clst, filename = './png/maps/clustering/v2_rf_cluster5_ara-rob.jpg', units = 'in', width = 9, height = 5, dpi = 300)
 
 
 ## Check arabica vs robusta -----------------------------------------------
@@ -220,7 +225,7 @@ gcls <- ggplot(data = clst, aes(x = cluster, y = count, fill = Specie)) +
   )
 
 gcls
-ggsave(plot = gcls, filename = './png/graphs/count_rf-cluster_arabica-robusta.jpg', units = 'in', width = 6, height = 5, dpi = 300, create.dir = T)
+ggsave(plot = gcls, filename = './png/graphs/v2/count_rf-cluster_arabica-robusta.jpg', units = 'in', width = 6, height = 5, dpi = 300, create.dir = T)
 
 
 # Background --------------------------------------------------------------
